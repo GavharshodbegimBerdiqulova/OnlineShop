@@ -61,12 +61,13 @@ Eski serverni to'xtatish: `lsof -ti :8000 | xargs kill`
 
 ### users
 
-**User** — `AbstractUser` asosidagi custom user. Login `email` orqali bo'ladi, `username` ishlatilmaydi.
+**User** — `AbstractUser` asosidagi custom user. Admin panel va `createsuperuser` email bilan ishlaydi (`USERNAME_FIELD = email`), API'da esa login email, telefon yoki username bilan qilinadi.
 
 | Maydon | Tavsif |
 |--------|--------|
-| `email` | Unikal, login uchun ishlatiladi |
-| `phone` | Telefon raqami |
+| `email` | Unikal, regex bilan tekshiriladi |
+| `username` | Unikal, regex bilan tekshiriladi |
+| `phone` | Unikal, `+998XXXXXXXXX` formatida |
 | `avatar` | Profil rasmi |
 | `birth_date` | Tug'ilgan sana |
 | `role` | `customer` (mijoz) yoki `admin` |
@@ -160,6 +161,97 @@ EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
 | Xat kelmadi | Spam papkasini tekshiring. `.env` dagi `EMAIL_BACKEND` console bo'lsa, xat faqat terminalga chiqadi |
 | `.env` o'zgartirildi, lekin ta'sir qilmadi | Serverni qayta ishga tushiring, `.env` faqat start paytida o'qiladi |
 
+## Regex tekshiruvlar
+
+Fayl: `users/validators.py`. Regexlar ikki joyda ishlatiladi:
+
+- **Model maydonlarida** (`User.email`, `User.username`, `User.phone`) `RegexValidator` sifatida.
+- **Signup va login serializerlarida**, shuningdek profilni tahrirlashda.
+
+### Email
+
+```
+^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$
+```
+
+| Qism | Ma'nosi |
+|------|---------|
+| `[A-Za-z0-9._%+-]+` | `@` dan oldin: harf, raqam va `. _ % + -` belgilari, kamida 1 ta |
+| `@` | Bitta `@` belgisi |
+| `[A-Za-z0-9-]+` | Domen nomi (`gmail`) |
+| `(\.[A-Za-z0-9-]+)*` | Qo'shimcha domen qismlari (`mail.company`), bo'lmasligi ham mumkin |
+| `\.[A-Za-z]{2,}` | Oxirgi qism: nuqta va kamida 2 ta harf (`.com`, `.uz`) |
+
+| To'g'ri | Noto'g'ri |
+|---------|-----------|
+| `ali@gmail.com` | `ali@gmail` (nuqtali domen yo'q) |
+| `ali.valiyev+shop@mail.company.uz` | `ali valiyev@gmail.com` (probel bor) |
+| `a_b-c@sub-domain.org` | `@gmail.com` (`@` dan oldin hech narsa yo'q) |
+
+Saqlashdan oldin email kichik harfga o'tkaziladi va takrorlanishi katta-kichik harfga bog'liq emas tekshiriladi (`Ali@Gmail.com` va `ali@gmail.com` bir xil).
+
+### Telefon
+
+```
+^\+998\d{9}$
+```
+
+| Qism | Ma'nosi |
+|------|---------|
+| `\+998` | O'zbekiston kodi `+998` |
+| `\d{9}` | Aynan 9 ta raqam (operator kodi + raqam) |
+
+| To'g'ri | Noto'g'ri |
+|---------|-----------|
+| `+998901234567` | `+99890123456` (raqam yetishmaydi) |
+| | `998901234567` (`+` yo'q, normalizatsiyadan keyin to'g'ri bo'ladi) |
+| | `+7901234567` (boshqa davlat) |
+
+Regexdan oldin `normalize_phone()` ishlaydi: probel, `-` va qavslar olib tashlanadi, so'ng:
+
+| Kiritilgan | Natija |
+|------------|--------|
+| `90 123-45-67` | `+998901234567` |
+| `901234567` | `+998901234567` |
+| `998901234567` | `+998901234567` |
+| `+998 (90) 123-45-67` | `+998901234567` |
+
+Telefon bazada doim shu bir xil formatda saqlanadi va unikal.
+
+### Username
+
+```
+^[A-Za-z][A-Za-z0-9_]{2,19}$
+```
+
+| Qism | Ma'nosi |
+|------|---------|
+| `[A-Za-z]` | Birinchi belgi faqat harf |
+| `[A-Za-z0-9_]{2,19}` | Keyingi 2-19 belgi: harf, raqam yoki `_` |
+
+Jami uzunlik: 3 dan 20 gacha.
+
+| To'g'ri | Noto'g'ri |
+|---------|-----------|
+| `ali_01` | `1ali` (raqam bilan boshlanadi) |
+| `Shop_User` | `al` (juda qisqa, 3 belgidan kam) |
+| `abc` | `ali-01` (`-` mumkin emas) |
+| | `ali valiyev` (probel bor) |
+| | 21 belgidan uzun nom |
+
+Username takrorlanishi katta-kichik harfga bog'liq emas (`Ali_01` va `ali_01` bir xil).
+
+### Loginda ishlatilishi
+
+`/api/auth/login/` dagi `login` maydoni tartib bilan tekshiriladi (`login_type()`):
+
+1. Email regexiga mos kelsa, email bo'yicha qidiriladi.
+2. Aks holda normallashtirilgan qiymat telefon regexiga mos kelsa, telefon bo'yicha qidiriladi.
+3. Aks holda username regexiga mos kelsa, username bo'yicha qidiriladi.
+4. Hech biriga mos kelmasa, `400` xato qaytadi.
+
+Email `@` belgisi bor, username esa `@` va `+` ni qabul qilmaydi, shuning uchun uchala tur bir-biri bilan chalkashmaydi.
+
 ## Swagger
 
 `drf-spectacular` orqali ulangan. Server ishlaganda:
@@ -179,7 +271,7 @@ Hamma auth endpointlar `/api/auth/` ostida. Himoyalangan endpointlarga `Authoriz
 | POST | `/api/auth/register/` | yo'q | Ro'yxatdan o'tish, emailga 6 xonali kod yuboriladi |
 | POST | `/api/auth/verify-email/` | yo'q | Email va kod bilan emailni tasdiqlash |
 | POST | `/api/auth/resend-code/` | yo'q | Tasdiqlash kodini qayta yuborish |
-| POST | `/api/auth/login/` | yo'q | Email va parol bilan kirish, `access` va `refresh` token qaytaradi |
+| POST | `/api/auth/login/` | yo'q | Email, telefon yoki username bilan kirish, `access` va `refresh` token qaytaradi |
 | POST | `/api/auth/token/refresh/` | yo'q | `refresh` orqali yangi `access` olish |
 | POST | `/api/auth/logout/` | ha | `refresh` tokenni bekor qilish |
 | POST | `/api/auth/forgot-password/` | yo'q | Parolni tiklash kodini emailga yuborish |
@@ -198,6 +290,8 @@ Hamma auth endpointlar `/api/auth/` ostida. Himoyalangan endpointlarga `Authoriz
 4. Token tugasa, `token/refresh` bilan yangilanadi. `logout` refresh tokenni bekor qiladi.
 5. Parol esdan chiqsa: `forgot-password` → emailga kod → `reset-password`.
 
+Email, telefon va username regex orqali tekshiriladi. Batafsil: [Regex tekshiruvlar](#regex-tekshiruvlar) bo'limida.
+
 **Qoidalar**
 
 - Parol Django'ning parol tekshiruvlaridan o'tishi kerak (kamida 8 belgi, juda oddiy bo'lmasligi, faqat raqamlardan iborat bo'lmasligi).
@@ -212,6 +306,7 @@ Hamma auth endpointlar `/api/auth/` ostida. Himoyalangan endpointlarga `Authoriz
 POST /api/auth/register/
 {
   "email": "ali@gmail.com",
+  "username": "ali_01",
   "first_name": "Ali",
   "last_name": "Valiyev",
   "phone": "+998901234567",
@@ -227,8 +322,10 @@ POST /api/auth/verify-email/
 
 ```json
 POST /api/auth/login/
-{ "email": "ali@gmail.com", "password": "Str0ng!pass9" }
+{ "login": "ali@gmail.com", "password": "Str0ng!pass9" }
 ```
+
+`login` o'rniga `"+998901234567"` yoki `"ali_01"` ham yozish mumkin.
 
 ```json
 POST /api/auth/reset-password/

@@ -5,6 +5,8 @@ from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 from django.utils import timezone
 
+from .validators import email_validator, phone_validator, username_validator
+
 
 class UserManager(BaseUserManager):
     """Email orqali login qiladigan user uchun manager."""
@@ -38,9 +40,9 @@ class User(AbstractUser):
         CUSTOMER = "customer", "Mijoz"
         ADMIN = "admin", "Admin"
 
-    username = None
-    email = models.EmailField("Email", unique=True)
-    phone = models.CharField("Telefon", max_length=20, blank=True)
+    username = models.CharField("Username", max_length=20, unique=True, null=True, blank=True, validators=[username_validator])
+    email = models.EmailField("Email", unique=True, validators=[email_validator])
+    phone = models.CharField("Telefon", max_length=13, unique=True, null=True, blank=True, validators=[phone_validator])
     avatar = models.ImageField("Rasm", upload_to="avatars/", blank=True, null=True)
     birth_date = models.DateField("Tug'ilgan sana", blank=True, null=True)
     role = models.CharField(max_length=10, choices=Role.choices, default=Role.CUSTOMER)

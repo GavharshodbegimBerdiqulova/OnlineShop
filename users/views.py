@@ -7,7 +7,6 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework_simplejwt.views import TokenObtainPairView
 
 from .models import Address, VerificationCode
 from .serializers import (
@@ -84,12 +83,15 @@ class ResendCodeView(APIView):
         return Response({"detail": "Agar email mavjud bo'lsa, kod yuborildi"})
 
 
-class LoginView(TokenObtainPairView):
+class LoginView(generics.GenericAPIView):
     serializer_class = LoginSerializer
+    permission_classes = [AllowAny]
 
-    @extend_schema(tags=["auth"], summary="Kirish (login)")
-    def post(self, request, *args, **kwargs):
-        return super().post(request, *args, **kwargs)
+    @extend_schema(tags=["auth"], summary="Kirish (email, telefon yoki username bilan)")
+    def post(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return Response(serializer.validated_data)
 
 
 class LogoutView(APIView):
