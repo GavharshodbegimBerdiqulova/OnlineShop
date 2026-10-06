@@ -361,6 +361,222 @@ pending ─> paid ─> shipped ─> delivered
 
 To'lov tizimi ulanmagan, `paid` holatini admin qo'lda belgilaydi.
 
+## So'rov va javob namunalari
+
+Xatolar `400` (noto'g'ri ma'lumot), `401` (token yo'q yoki eskirgan), `403` (ruxsat yo'q), `404` (topilmadi), `429` (juda tez-tez), `503` (kod yuborib bo'lmadi) kodlari bilan qaytadi. Validatsiya xatosi maydon nomi bilan keladi: `{"password2": ["Parollar bir xil emas"]}`, umumiy xato esa `{"detail": "..."}` ko'rinishida.
+
+### Auth
+
+**`POST /api/auth/send-code/`**
+
+```json
+{ "contact": "+998901234567", "purpose": "signup" }
+```
+```json
+{ "detail": "Tasdiqlash kodi yuborildi", "resend_after": 120 }
+```
+
+`purpose`: `signup` yoki `reset`. `contact`: email yoki telefon.
+
+**`POST /api/auth/verify-code/`**
+
+```json
+{ "contact": "+998901234567", "purpose": "signup", "code": "1234" }
+```
+```json
+{ "token": "eyJjb250YWN0Ijoi..." }
+```
+
+**`POST /api/auth/sign-up/`**
+
+```json
+{
+  "token": "eyJjb250YWN0Ijoi...",
+  "full_name": "Ali Valiyev",
+  "username": "ali_01",
+  "password": "Str0ng!pass9",
+  "password2": "Str0ng!pass9"
+}
+```
+```json
+{
+  "access": "eyJ...",
+  "refresh": "eyJ...",
+  "user": {
+    "id": 1, "full_name": "Ali Valiyev", "first_name": "Ali", "last_name": "Valiyev",
+    "username": "ali_01", "email": null, "phone": "+998901234567",
+    "avatar": null, "birth_date": null, "role": "customer"
+  }
+}
+```
+
+`username` ixtiyoriy.
+
+**`POST /api/auth/login/`**
+
+```json
+{ "login": "ali_01", "password": "Str0ng!pass9", "remember_me": true }
+```
+
+Javob `sign-up` javobi bilan bir xil: `access`, `refresh`, `user` (status `200`). Login yoki parol xato bo'lsa `{"detail": "Login yoki parol noto'g'ri"}`.
+
+**`POST /api/auth/token/refresh/`**
+
+```json
+{ "refresh": "eyJ..." }
+```
+```json
+{ "access": "eyJ...", "refresh": "eyJ..." }
+```
+
+Har safar yangi `refresh` beriladi, eskisi bekor bo'ladi. Keyingi so'rovda yangisini ishlating.
+
+**`POST /api/auth/logout/`** (token kerak)
+
+```json
+{ "refresh": "eyJ..." }
+```
+
+**`POST /api/auth/reset-password/`**
+
+```json
+{ "token": "eyJjb250YWN0Ijoi...", "new_password": "N3w!password" }
+```
+
+**`POST /api/auth/change-password/`** (token kerak)
+
+```json
+{ "old_password": "Str0ng!pass9", "new_password": "N3w!password" }
+```
+
+**`GET /api/auth/me/`, `PATCH /api/auth/me/`** (token kerak)
+
+```json
+{ "first_name": "Sher", "last_name": "Aliyev", "username": "sher_01", "birth_date": "2000-05-20" }
+```
+
+O'zgartirish mumkin: `first_name`, `last_name`, `username`, `birth_date`, `avatar`. O'zgarmaydi: `email`, `phone`, `role`.
+
+**`POST /api/auth/me/avatar/`** (token kerak, `multipart/form-data`)
+
+```
+avatar: <rasm fayli, 5 MB gacha>
+```
+
+Javob: yangilangan profil (`avatar` maydonida rasm manzili). `DELETE` bilan rasm o'chiriladi (`204`).
+
+### Manzillar (token kerak)
+
+**`POST /api/addresses/`**
+
+```json
+{ "title": "Uy", "city": "Toshkent", "street": "Amir Temur 1", "zip_code": "100000", "is_default": true }
+```
+```json
+{ "id": 1, "title": "Uy", "city": "Toshkent", "street": "Amir Temur 1", "zip_code": "100000", "is_default": true }
+```
+
+### Kategoriya va mahsulot (yozish uchun admin tokeni kerak)
+
+**`POST /api/categories/`**
+
+```json
+{ "name": "Telefon" }
+```
+```json
+{ "id": 1, "name": "Telefon", "slug": "telefon" }
+```
+
+**`POST /api/products/`** (rasm bilan yuborish uchun `multipart/form-data`)
+
+```json
+{ "category": 1, "name": "iPhone 15", "description": "128 GB", "price": "1000.00", "stock": 5, "is_active": true }
+```
+```json
+{
+  "id": 1, "category": 1, "category_name": "Telefon", "name": "iPhone 15", "slug": "iphone-15",
+  "description": "128 GB", "price": "1000.00", "stock": 5, "image": null,
+  "is_active": true, "created_at": "2026-10-06T12:00:00Z"
+}
+```
+
+**`GET /api/products/?category=telefon&ordering=-price&page=1`**
+
+```json
+{ "count": 1, "next": null, "previous": null, "results": [ { "id": 1, "name": "iPhone 15", "slug": "iphone-15", "price": "1000.00" } ] }
+```
+
+(`results` ichida har bir mahsulot yuqoridagi to'liq ko'rinishda keladi.)
+
+### Savat (token kerak)
+
+**`POST /api/cart/items/`**
+
+```json
+{ "product": 1, "quantity": 2 }
+```
+
+**`PATCH /api/cart/items/{id}/`**
+
+```json
+{ "quantity": 3 }
+```
+
+Savat bilan ishlaydigan hamma endpoint (`GET`, `DELETE /api/cart/`, `POST /api/cart/items/`, `PATCH` va `DELETE /api/cart/items/{id}/`) savatning to'liq holatini qaytaradi:
+
+```json
+{
+  "id": 1,
+  "items": [
+    {
+      "id": 1,
+      "product": { "id": 1, "name": "iPhone 15", "slug": "iphone-15", "price": "1000.00", "image": null, "stock": 5 },
+      "quantity": 2,
+      "subtotal": "2000.00"
+    }
+  ],
+  "total_price": "2000.00"
+}
+```
+
+### Buyurtma (token kerak)
+
+**`POST /api/orders/`**
+
+```json
+{ "address": 1 }
+```
+```json
+{
+  "id": 1, "user": 1, "status": "pending", "status_display": "Kutilmoqda",
+  "address": 1, "address_text": "Uy: Toshkent, Amir Temur 1",
+  "total_price": "2000.00",
+  "items": [ { "id": 1, "product": 1, "product_name": "iPhone 15", "price": "1000.00", "quantity": 2, "subtotal": "2000.00" } ],
+  "created_at": "2026-10-06T12:30:00Z"
+}
+```
+
+`GET /api/orders/`, `GET /api/orders/{id}/`, `POST /api/orders/{id}/cancel/` (so'rov tanasi yo'q) va `PATCH /api/orders/{id}/status/` shu ko'rinishdagi buyurtmani qaytaradi.
+
+**`PATCH /api/orders/{id}/status/`** (faqat admin)
+
+```json
+{ "status": "paid" }
+```
+
+`status`: `pending`, `paid`, `shipped`, `delivered`, `canceled`.
+
+### Sinov endpointi
+
+**`POST /api/send-test-email/`** (token shart emas)
+
+```json
+{ "email": "manzil@gmail.com", "subject": "OnlineShop test", "message": "Salom" }
+```
+```json
+{ "detail": "Xat yuborildi" }
+```
+
 ## Swagger
 
 `drf-spectacular` orqali ulangan. Server ishlaganda:
