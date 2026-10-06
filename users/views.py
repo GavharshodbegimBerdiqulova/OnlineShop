@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, status, viewsets
-from rest_framework.exceptions import APIException
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -11,83 +11,84 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from .models import Address, VerificationCode
 from .serializers import (
     AddressSerializer,
+    AvatarSerializer,
     ChangePasswordSerializer,
-    EmailSerializer,
     LoginSerializer,
     LogoutSerializer,
     ProfileSerializer,
-    RegisterSerializer,
     ResetPasswordSerializer,
+    SendCodeSerializer,
     SendTestEmailSerializer,
-    VerifyEmailSerializer,
+    SignUpSerializer,
+    TokenResponseSerializer,
+    VerifyCodeSerializer,
 )
-from .services.email_service import send_email, send_reset_code, send_verification_code, verify_code
+from .services.code_service import check_code, make_token, read_token, send_code
+from .services.email_service import send_email
+from .services.token_service import get_tokens
 
 User = get_user_model()
 
 
-class EmailSendError(APIException):
-    status_code = 503
-    default_detail = "Email yuborib bo'lmadi, keyinroq urinib ko'ring"
-
-
-class RegisterView(generics.CreateAPIView):
-    serializer_class = RegisterSerializer
+class SendCodeView(APIView):
     permission_classes = [AllowAny]
 
-    @extend_schema(tags=["auth"], summary="Ro'yxatdan o'tish")
-    def post(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.save()
-        try:
-            send_verification_code(user)
-        except Exception:
-            user.delete()
-            raise EmailSendError()
-        return Response(
-            {"detail": "Ro'yxatdan o'tdingiz. Emailga tasdiqlash kodi yuborildi"},
-            status=status.HTTP_201_CREATED,
-        )
-
-
-class VerifyEmailView(APIView):
-    permission_classes = [AllowAny]
-
-    @extend_schema(request=VerifyEmailSerializer, responses={200: None}, tags=["auth"], summary="Emailni tasdiqlash")
+    @extend_schema(
+        request=SendCodeSerializer,
+        responses={200: None},
+        tags=["auth"],
+        summary="1. Email yoki telefonga tasdiqlash kodi yuborish",
+    )
     def post(self, request):
-        serializer = VerifyEmailSerializer(data=request.data)
+        serializer = SendCodeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        user = User.objects.filter(email__iexact=data["email"]).first()
-        if user is None or not verify_code(user, data["code"], VerificationCode.Purpose.EMAIL):
-            return Response({"detail": "Kod noto'g'ri yoki muddati o'tgan"}, status=status.HTTP_400_BAD_REQUEST)
-        user.is_verified = True
-        user.save()
-        return Response({"detail": "Email tasdiqlandi"})
+        if data["purpose"] == VerificationCode.Purpose.SIGNUP or data["user_exists"]:
+            send_code(data["contact"], data["purpose"])
+        return Response({"detail": "Tasdiqlash kodi yuborildi", "resend_after": 120})
 
 
-class ResendCodeView(APIView):
+class VerifyCodeView(APIView):
     permission_classes = [AllowAny]
 
-    @extend_schema(request=EmailSerializer, responses={200: None}, tags=["auth"], summary="Tasdiqlash kodini qayta yuborish")
+    @extend_schema(
+        request=VerifyCodeSerializer,
+        responses={200: TokenResponseSerializer},
+        tags=["auth"],
+        summary="2. Kodni tasdiqlash (sign-up yoki reset-password uchun token qaytaradi)",
+    )
     def post(self, request):
-        serializer = EmailSerializer(data=request.data)
+        serializer = VerifyCodeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = User.objects.filter(email__iexact=serializer.validated_data["email"], is_verified=False).first()
-        if user:
-            try:
-                send_verification_code(user)
-            except Exception:
-                raise EmailSendError()
-        return Response({"detail": "Agar email mavjud bo'lsa, kod yuborildi"})
+        data = serializer.validated_data
+        if not check_code(data["contact"], data["code"], data["purpose"]):
+            return Response({"detail": "Kod noto'g'ri yoki muddati o'tgan"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"token": make_token(data["contact"], data["purpose"])})
+
+
+class SignUpView(APIView):
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        request=SignUpSerializer,
+        responses={201: None},
+        tags=["auth"],
+        summary="3. Ism va parol kiritib, foydalanuvchi yaratish",
+    )
+    def post(self, request):
+        serializer = SignUpSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        data = get_tokens(user)
+        data["user"] = ProfileSerializer(user, context={"request": request}).data
+        return Response(data, status=status.HTTP_201_CREATED)
 
 
 class LoginView(generics.GenericAPIView):
     serializer_class = LoginSerializer
     permission_classes = [AllowAny]
 
-    @extend_schema(tags=["auth"], summary="Kirish (email, telefon yoki username bilan)")
+    @extend_schema(tags=["auth"], summary="5. Kirish (email, telefon yoki username bilan)")
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -106,33 +107,28 @@ class LogoutView(APIView):
         return Response({"detail": "Tizimdan chiqdingiz"})
 
 
-class ForgotPasswordView(APIView):
-    permission_classes = [AllowAny]
-
-    @extend_schema(request=EmailSerializer, responses={200: None}, tags=["auth"], summary="Parolni tiklash kodini yuborish")
-    def post(self, request):
-        serializer = EmailSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = User.objects.filter(email__iexact=serializer.validated_data["email"], is_active=True).first()
-        if user:
-            try:
-                send_reset_code(user)
-            except Exception:
-                raise EmailSendError()
-        return Response({"detail": "Agar email mavjud bo'lsa, kod yuborildi"})
-
-
 class ResetPasswordView(APIView):
     permission_classes = [AllowAny]
 
-    @extend_schema(request=ResetPasswordSerializer, responses={200: None}, tags=["auth"], summary="Kod bilan yangi parol o'rnatish")
+    @extend_schema(
+        request=ResetPasswordSerializer,
+        responses={200: None},
+        tags=["auth"],
+        summary="Parolni tiklash (verify-code tokeni bilan)",
+    )
     def post(self, request):
         serializer = ResetPasswordSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        user = User.objects.filter(email__iexact=data["email"]).first()
-        if user is None or not verify_code(user, data["code"], VerificationCode.Purpose.RESET):
-            return Response({"detail": "Kod noto'g'ri yoki muddati o'tgan"}, status=status.HTTP_400_BAD_REQUEST)
+        contact = read_token(data["token"], VerificationCode.Purpose.RESET)
+        if contact is None:
+            return Response({"detail": "Token noto'g'ri yoki muddati o'tgan"}, status=status.HTTP_400_BAD_REQUEST)
+        if "@" in contact:
+            user = User.objects.filter(email__iexact=contact).first()
+        else:
+            user = User.objects.filter(phone=contact).first()
+        if user is None:
+            return Response({"detail": "Foydalanuvchi topilmadi"}, status=status.HTTP_400_BAD_REQUEST)
         user.set_password(data["new_password"])
         user.save()
         return Response({"detail": "Parol o'zgartirildi"})
@@ -166,6 +162,33 @@ class ProfileView(generics.RetrieveUpdateAPIView):
     @extend_schema(tags=["profile"], summary="Profilni qisman o'zgartirish")
     def patch(self, request, *args, **kwargs):
         return super().patch(request, *args, **kwargs)
+
+
+class AvatarView(APIView):
+    parser_classes = [MultiPartParser, FormParser]
+
+    @extend_schema(
+        request=AvatarSerializer,
+        responses={200: ProfileSerializer},
+        tags=["profile"],
+        summary="4. Profil rasmini yuklash (ixtiyoriy)",
+    )
+    def post(self, request):
+        serializer = AvatarSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if request.user.avatar:
+            request.user.avatar.delete(save=False)
+        request.user.avatar = serializer.validated_data["avatar"]
+        request.user.save()
+        return Response(ProfileSerializer(request.user, context={"request": request}).data)
+
+    @extend_schema(responses={204: None}, tags=["profile"], summary="Profil rasmini o'chirish")
+    def delete(self, request):
+        if request.user.avatar:
+            request.user.avatar.delete(save=False)
+            request.user.avatar = None
+            request.user.save()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @extend_schema(tags=["addresses"])

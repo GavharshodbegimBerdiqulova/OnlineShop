@@ -1,16 +1,14 @@
 # OnlineShop
 
-Django va Django REST Framework asosidagi online do'kon loyihasi.
-
-Hozirgi holat: modellar, email xizmati, Swagger hujjati va to'liq auth API (JWT) tayyor. Mahsulot, savat va buyurtma API'lari keyingi bosqichda yoziladi.
+Django va Django REST Framework asosidagi online do'kon loyihasi: autentifikatsiya (email yoki telefon + tasdiqlash kodi, JWT), mahsulotlar, savat va buyurtmalar. Barcha endpointlar Swagger orqali sinab ko'riladi.
 
 ## Texnologiyalar
 
 - Python 3
 - Django 6.1
 - Django REST Framework
-- drf-spectacular (Swagger / OpenAPI)
 - djangorestframework-simplejwt (JWT token)
+- drf-spectacular (Swagger / OpenAPI)
 - Pillow (rasmlar uchun)
 - python-dotenv (`.env` fayl uchun)
 - SQLite (standart baza)
@@ -19,19 +17,25 @@ Hozirgi holat: modellar, email xizmati, Swagger hujjati va to'liq auth API (JWT)
 
 ```
 OnlineShop/
-├── config/                  Loyiha sozlamalari (settings, urls)
-├── users/                   Foydalanuvchi va autentifikatsiya
-│   ├── models.py            User, Address, VerificationCode
+├── config/                     Loyiha sozlamalari (settings, urls)
+├── users/                      Foydalanuvchi va autentifikatsiya
+│   ├── models.py               User, Address, VerificationCode
+│   ├── validators.py           Email, telefon, username regexlari
+│   ├── permissions.py          IsAdmin, IsAdminOrReadOnly
 │   ├── services/
-│   │   └── email_service.py Email yuborish xizmati
-│   ├── serializers.py       Auth, profil va manzil serializerlari
-│   ├── views.py             Auth, profil, manzil va test email viewlari
-│   └── urls.py              /api/ manzillari
-├── products/                Kategoriya va mahsulotlar
-├── cart/                    Savat
-├── orders/                  Buyurtmalar
-├── .env                     Maxfiy sozlamalar (gitga tushmaydi)
-├── .env.example             .env uchun namuna
+│   │   ├── code_service.py     Kod yuborish/tekshirish, token
+│   │   ├── email_service.py    Email yuborish (Gmail)
+│   │   ├── sms_service.py      SMS yuborish
+│   │   └── token_service.py    JWT yaratish
+│   ├── serializers.py
+│   ├── views.py
+│   └── urls.py
+├── products/                   Kategoriya va mahsulotlar
+├── cart/                       Savat
+├── orders/                     Buyurtmalar
+│   └── services.py             Buyurtma yaratish, bekor qilish, status
+├── .env                        Maxfiy sozlamalar (gitga tushmaydi)
+├── .env.example                .env uchun namuna
 └── requirements.txt
 ```
 
@@ -49,13 +53,9 @@ python manage.py runserver
 
 Yangi terminal ochilganda `source venv/bin/activate` ni qayta bajarish kerak.
 
-Port band bo'lsa, boshqa port bering (bayroqsiz):
+Port band bo'lsa, boshqa port bering (bayroqsiz): `python manage.py runserver 8083`. Eski serverni to'xtatish: `lsof -ti :8000 | xargs kill`.
 
-```bash
-python manage.py runserver 8083
-```
-
-Eski serverni to'xtatish: `lsof -ti :8000 | xargs kill`
+Admin panel: http://127.0.0.1:8000/admin/ (superuser email va paroli bilan). Kategoriya va mahsulotlarni shu yerdan yoki admin tokeni bilan Swaggerdan qo'shish mumkin.
 
 ## Modellar
 
@@ -65,71 +65,110 @@ Eski serverni to'xtatish: `lsof -ti :8000 | xargs kill`
 
 | Maydon | Tavsif |
 |--------|--------|
-| `email` | Unikal, regex bilan tekshiriladi |
-| `username` | Unikal, regex bilan tekshiriladi |
-| `phone` | Unikal, `+998XXXXXXXXX` formatida |
+| `email` | Unikal, ixtiyoriy (faqat telefon bilan ham ro'yxatdan o'tish mumkin) |
+| `phone` | Unikal, ixtiyoriy, `+998XXXXXXXXX` formatida |
+| `username` | Unikal, ixtiyoriy |
+| `first_name`, `last_name` | Ism va familiya (sign-up da `full_name` dan ajratiladi) |
 | `avatar` | Profil rasmi |
 | `birth_date` | Tug'ilgan sana |
 | `role` | `customer` (mijoz) yoki `admin` |
-| `is_verified` | Email tasdiqlanganmi |
+| `is_verified` | Email yoki telefon tasdiqlangan (sign-up orqali yaratilganlar uchun doim `True`) |
 
-`UserManager` — `create_user` va `create_superuser` metodlari email bilan ishlaydi. Superuser avtomatik `admin` roli va tasdiqlangan holatda yaratiladi.
+`UserManager` — `create_user` email yoki telefon bilan, `create_superuser` faqat email bilan ishlaydi. Superuser avtomatik `admin` roli va tasdiqlangan holatda yaratiladi.
 
-**Address** — foydalanuvchining yetkazib berish manzillari (`user`, `title`, `city`, `street`, `zip_code`, `is_default`). Bitta manzil `is_default=True` qilinsa, foydalanuvchining boshqa manzillaridan bu belgi olib tashlanadi.
+**Address** — yetkazib berish manzillari (`user`, `title`, `city`, `street`, `zip_code`, `is_default`). Bitta manzil `is_default=True` qilinsa, foydalanuvchining boshqa manzillaridan bu belgi olib tashlanadi.
 
-**VerificationCode** — email tasdiqlash (`email`) va parolni tiklash (`reset`) uchun 6 xonali bir martalik kod. Kod yaratilgandan keyin 5 daqiqa amal qiladi (`is_expired()`), ishlatilgach `is_used=True` bo'ladi.
+**VerificationCode** — email yoki telefonga yuboriladigan 4 xonali bir martalik kod: `contact`, `code`, `purpose` (`signup` yoki `reset`), `is_used`, `attempts`, `created_at`. Kod 5 daqiqa amal qiladi, 5 marta noto'g'ri kiritilgach bloklanadi. Kod hali foydalanuvchi yaratilmasdan oldin ham kerak bo'lgani uchun `user` ga emas, `contact` ga bog'langan.
 
 ### products
 
-**Category** — kategoriya (`name`, `slug`).
-
-**Product** — mahsulot: `category`, `name`, `slug`, `description`, `price`, `stock` (ombordagi soni), `image`, `is_active` (sotuvdami), `created_at`.
+**Category** — `name`, `slug`. **Product** — `category`, `name`, `slug`, `description`, `price`, `stock`, `image`, `is_active`, `created_at`. `slug` bo'sh qoldirilsa, nomdan avtomatik yaratiladi (`iPhone 15` → `iphone-15`, takrorlansa `iphone-15-2`).
 
 ### cart
 
-**Cart** — har bir foydalanuvchiga bitta savat (`OneToOne`). `total_price` — savatdagi barcha mahsulotlar jami narxi.
-
-**CartItem** — savatdagi mahsulot va uning soni (`quantity`). Bitta mahsulot savatda faqat bitta qator bo'lib turadi (`unique_together`). `subtotal` — narx × soni.
+**Cart** — har bir foydalanuvchiga bitta savat. `total_price` — jami narx. **CartItem** — savatdagi mahsulot va uning soni, bitta mahsulot bitta qator (`unique_together`). `subtotal` — narx × soni.
 
 ### orders
 
-**Order** — buyurtma: `user`, `address`, `status`, `total_price`, `created_at`.
-
-Statuslar: `pending` (kutilmoqda), `paid` (to'langan), `shipped` (yo'lda), `delivered` (yetkazildi), `canceled` (bekor qilindi).
-
-**OrderItem** — buyurtmadagi mahsulot: `product`, `price`, `quantity`. `price` buyurtma vaqtidagi narxni saqlaydi, shuning uchun mahsulot narxi keyin o'zgarsa ham buyurtma o'zgarmaydi.
+**Order** — `user`, `address`, `status`, `total_price`, `created_at`. Statuslar: `pending` (kutilmoqda), `paid` (to'langan), `shipped` (yo'lda), `delivered` (yetkazildi), `canceled` (bekor qilindi). **OrderItem** — `product`, `price`, `quantity`. `price` buyurtma vaqtidagi narxni saqlaydi, mahsulot narxi keyin o'zgarsa ham buyurtma o'zgarmaydi.
 
 ### Bog'lanishlar
 
 ```
 User ─┬─< Address
-      ├─< VerificationCode
       ├─1 Cart ─< CartItem >─ Product >─ Category
       └─< Order ─< OrderItem >─ Product
               └─ Address
+VerificationCode (contact orqali, User ga bog'lanmagan)
 ```
 
-## Email xizmati
+## Autentifikatsiya
 
-Fayl: `users/services/email_service.py`
+Oqim ilova ekranlariga mos: email yoki telefon → kod → ism va parol → profil rasmi → login.
 
-| Funksiya | Vazifasi |
-|----------|----------|
-| `send_email(to_email, subject, message)` | Oddiy xat yuboradi |
-| `send_verification_code(user)` | Email tasdiqlash kodini yaratadi va yuboradi |
-| `send_reset_code(user)` | Parolni tiklash kodini yaratadi va yuboradi |
-| `verify_code(user, code, purpose)` | Kodni tekshiradi. To'g'ri, ishlatilmagan va 5 daqiqadan oshmagan bo'lsa `True` qaytaradi va kodni ishlatilgan deb belgilaydi |
+| # | Qadam | Endpoint |
+|---|-------|----------|
+| 1 | Email yoki telefon kiritiladi, kod yuboriladi | `POST /api/auth/send-code/` |
+| 2 | 4 xonali kod tasdiqlanadi | `POST /api/auth/verify-code/` |
+| 3 | Ism va parol kiritilib, user yaratiladi (**Sign Up**) | `POST /api/auth/sign-up/` |
+| 4 | Profil rasmi yuklanadi (ixtiyoriy, o'tkazib yuborish mumkin) | `POST /api/auth/me/avatar/` |
+| 5 | Email/telefon/username va parol bilan kirish | `POST /api/auth/login/` |
 
-Yangi kod so'ralganda, shu maqsad uchun eski ishlatilmagan kodlar bekor qilinadi.
+**Ro'yxatdan o'tish**
 
-Misol:
+1. `send-code` ga `{"contact": "+998901234567", "purpose": "signup"}` yuboriladi. Kod email yoki SMS orqali boradi. Kodni qayta yuborish 2 daqiqadan keyin mumkin (oldin so'ralsa `429` va kutish vaqti qaytadi, ekrandagi taymerga mos).
+2. `verify-code` ga `{"contact": ..., "purpose": "signup", "code": "1234"}`. To'g'ri bo'lsa `token` qaytadi (15 daqiqa amal qiladi).
+3. `sign-up` ga `token`, `full_name`, `password`, `password2` (va ixtiyoriy `username`) yuboriladi. Javobda `access`, `refresh` va `user` qaytadi, ya'ni foydalanuvchi darrov tizimga kiradi.
+4. Profil rasmi `multipart/form-data` bilan `avatar` maydonida yuboriladi (5 MB gacha, faqat rasm). Rasmni o'tkazib yuborish uchun hech narsa qilish shart emas. `DELETE` bilan o'chiriladi.
 
-```python
-from users.services.email_service import send_verification_code, verify_code
+**Login** (`/api/auth/login/`)
 
-send_verification_code(user)
-verify_code(user, "123456", "email")
+```json
+{ "login": "ali@gmail.com", "password": "Str0ng!pass9", "remember_me": true }
 ```
+
+`login` o'rniga telefon (`+998901234567`) yoki username (`ali_01`) ham yozish mumkin. `remember_me=true` bo'lsa refresh token 30 kun, aks holda 1 kun amal qiladi. `access` token 30 daqiqa.
+
+**Parolni unutdim**
+
+1. `send-code` ga `{"contact": ..., "purpose": "reset"}`.
+2. `verify-code` ga `purpose: "reset"` bilan kod yuboriladi, `token` olinadi.
+3. `reset-password` ga `{"token": ..., "new_password": ...}`.
+
+Foydalanuvchi bazada bor-yo'qligi `reset` da bildirilmaydi, javob doim bir xil.
+
+**Auth endpointlar**
+
+| Metod | Manzil | Token | Tavsif |
+|-------|--------|:-----:|--------|
+| POST | `/api/auth/send-code/` | yo'q | Kod yuborish (`purpose`: `signup` yoki `reset`) |
+| POST | `/api/auth/verify-code/` | yo'q | Kodni tasdiqlash, `token` olish |
+| POST | `/api/auth/sign-up/` | yo'q | Foydalanuvchi yaratish |
+| POST | `/api/auth/login/` | yo'q | Kirish |
+| POST | `/api/auth/token/refresh/` | yo'q | `refresh` orqali yangi `access` olish |
+| POST | `/api/auth/logout/` | ha | `refresh` tokenni bekor qilish |
+| POST | `/api/auth/reset-password/` | yo'q | Yangi parol o'rnatish |
+| POST | `/api/auth/change-password/` | ha | Eski parolni bilib almashtirish |
+| GET, PUT, PATCH | `/api/auth/me/` | ha | Profil. `email` va `phone` o'zgarmaydi (tasdiqlangan kontakt) |
+| POST, DELETE | `/api/auth/me/avatar/` | ha | Profil rasmini yuklash / o'chirish |
+| GET, POST | `/api/addresses/` | ha | O'z manzillari |
+| GET, PUT, PATCH, DELETE | `/api/addresses/{id}/` | ha | Manzil bilan ishlash |
+
+**Xavfsizlik**
+
+- Kod 4 xonali bo'lgani uchun 5 ta noto'g'ri urinishdan keyin bloklanadi, 5 daqiqada eskiradi va bir marta ishlatiladi.
+- `verify-code` tokeni imzolangan (`django.core.signing`), 15 daqiqa amal qiladi va faqat o'z maqsadi (`signup` yoki `reset`) uchun ishlaydi.
+- Parol Django'ning parol tekshiruvlaridan o'tishi kerak.
+- Tokensiz so'rovlar daqiqasiga 60 tagacha.
+- Logout qilingan refresh token ishlamaydi.
+
+## Email va SMS
+
+Kod email bo'lsa Gmail orqali (`users/services/email_service.py`), telefon bo'lsa SMS orqali (`users/services/sms_service.py`) yuboriladi.
+
+### SMS
+
+Hozircha SMS provayderi ulanmagan: `SMS_BACKEND=console` bo'lganda SMS yuborilmaydi, kod **server terminaliga** chiqadi (`[SMS] +998901234567: ... kodi: 1234`). Rivojlantirish va sinash uchun shu yetarli. Haqiqiy SMS (masalan Eskiz yoki Playmobile) uchun `send_sms()` funksiyasiga provayder chaqiruvini qo'shish va `.env` da `SMS_BACKEND` ni o'zgartirish kerak.
 
 ### Gmail sozlash
 
@@ -152,7 +191,7 @@ EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
 
 `.env` faylini hech qachon gitga yuklamang va parolni boshqalarga yubormang. Parol oshkor bo'lsa, apppasswords sahifasidan o'chirib, yangisini yarating.
 
-### Xatolar
+### Email xatolari
 
 | Xato | Sabab va yechim |
 |------|-----------------|
@@ -160,6 +199,8 @@ EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
 | `Username and Password not accepted` (535) | Parol yoki email noto'g'ri, yoki 2-Step Verification yoqilmagan |
 | Xat kelmadi | Spam papkasini tekshiring. `.env` dagi `EMAIL_BACKEND` console bo'lsa, xat faqat terminalga chiqadi |
 | `.env` o'zgartirildi, lekin ta'sir qilmadi | Serverni qayta ishga tushiring, `.env` faqat start paytida o'qiladi |
+
+Kod yuborib bo'lmasa (`send-code` 503 qaytaradi), kod bazadan o'chiriladi va qayta urinish mumkin.
 
 ## Regex tekshiruvlar
 
@@ -252,6 +293,74 @@ Username takrorlanishi katta-kichik harfga bog'liq emas (`Ali_01` va `ali_01` bi
 
 Email `@` belgisi bor, username esa `@` va `+` ni qabul qilmaydi, shuning uchun uchala tur bir-biri bilan chalkashmaydi.
 
+`/api/auth/send-code/` dagi `contact` maydoni faqat email yoki telefon bo'lishi mumkin (username qabul qilinmaydi). `sign-up` dagi `username` esa ixtiyoriy, kiritilsa username regexi bilan tekshiriladi.
+
+## Mahsulotlar
+
+Ko'rish hamma uchun ochiq, qo'shish/o'zgartirish/o'chirish faqat adminlar uchun (`role=admin` yoki `is_staff`). Oddiy foydalanuvchilar faqat `is_active=True` mahsulotlarni ko'radi.
+
+| Metod | Manzil | Kim | Tavsif |
+|-------|--------|-----|--------|
+| GET | `/api/categories/` | hamma | Kategoriyalar ro'yxati |
+| POST | `/api/categories/` | admin | Kategoriya qo'shish |
+| GET, PUT, PATCH, DELETE | `/api/categories/{slug}/` | GET hamma, qolganlari admin | Kategoriya bilan ishlash |
+| GET | `/api/products/` | hamma | Mahsulotlar ro'yxati (sahifalangan, 12 tadan) |
+| POST | `/api/products/` | admin | Mahsulot qo'shish (rasm uchun `multipart/form-data`) |
+| GET, PUT, PATCH, DELETE | `/api/products/{slug}/` | GET hamma, qolganlari admin | Mahsulot bilan ishlash |
+
+**Mahsulotlar ro'yxati filtrlari** (`GET /api/products/`)
+
+| Parametr | Tavsif | Misol |
+|----------|--------|-------|
+| `category` | Kategoriya slug'i | `?category=telefon` |
+| `search` | Nom va tavsif bo'yicha qidiruv | `?search=iphone` |
+| `min_price`, `max_price` | Narx oralig'i | `?min_price=500&max_price=2000` |
+| `in_stock` | Faqat omborda borlari | `?in_stock=true` |
+| `ordering` | Saralash: `price`, `-price`, `created_at`, `-created_at`, `name` | `?ordering=-price` |
+| `page` | Sahifa raqami | `?page=2` |
+
+## Savat
+
+Barcha endpointlar token talab qiladi, har bir foydalanuvchi faqat o'z savatini ko'radi. Savat birinchi so'rovda avtomatik yaratiladi. Hamma javoblar savatning to'liq holatini qaytaradi (`items`, `total_price`).
+
+| Metod | Manzil | Tavsif |
+|-------|--------|--------|
+| GET | `/api/cart/` | Savatni ko'rish |
+| DELETE | `/api/cart/` | Savatni tozalash |
+| POST | `/api/cart/items/` | Mahsulot qo'shish: `{"product": 1, "quantity": 2}`. Mahsulot savatda bo'lsa, soni qo'shiladi |
+| PATCH | `/api/cart/items/{id}/` | Sonini o'zgartirish: `{"quantity": 3}` |
+| DELETE | `/api/cart/items/{id}/` | Mahsulotni olib tashlash |
+
+Sotuvda bo'lmagan mahsulotni qo'shib bo'lmaydi, soni omborda bor miqdordan oshmasligi kerak.
+
+## Buyurtmalar
+
+| Metod | Manzil | Kim | Tavsif |
+|-------|--------|-----|--------|
+| POST | `/api/orders/` | foydalanuvchi | Savatdan buyurtma berish: `{"address": 1}` |
+| GET | `/api/orders/` | foydalanuvchi (admin hammasini ko'radi) | Buyurtmalar ro'yxati |
+| GET | `/api/orders/{id}/` | egasi yoki admin | Buyurtma tafsiloti |
+| POST | `/api/orders/{id}/cancel/` | egasi | Bekor qilish (faqat `pending`) |
+| PATCH | `/api/orders/{id}/status/` | admin | Holatni o'zgartirish: `{"status": "paid"}` |
+
+**Buyurtma berilganda:**
+
+1. Savat bo'sh bo'lmasligi, manzil foydalanuvchiga tegishli bo'lishi kerak.
+2. Har bir mahsulot sotuvda va omborda yetarli ekani tekshiriladi.
+3. Buyurtma va uning qatorlari yaratiladi, narx shu paytdagi narxda saqlanadi.
+4. Ombordagi son kamaytiriladi, savat tozalanadi. Hammasi bitta tranzaksiyada bajariladi, xato bo'lsa hech narsa o'zgarmaydi.
+
+**Bekor qilinganda** mahsulotlar omborga qaytariladi.
+
+**Status o'zgarishi** faqat quyidagi yo'nalishlarda mumkin:
+
+```
+pending ─> paid ─> shipped ─> delivered
+   └─────────┴─> canceled
+```
+
+To'lov tizimi ulanmagan, `paid` holatini admin qo'lda belgilaydi.
+
 ## Swagger
 
 `drf-spectacular` orqali ulangan. Server ishlaganda:
@@ -262,82 +371,18 @@ Email `@` belgisi bor, username esa `@` va `+` ni qabul qilmaydi, shuning uchun 
 | http://127.0.0.1:8000/api/redoc/ | ReDoc |
 | http://127.0.0.1:8000/api/schema/ | OpenAPI schema |
 
-### Auth API
+Endpointlar `auth`, `profile`, `addresses`, `categories`, `products`, `cart`, `orders`, `email` guruhlarida chiqadi.
 
-Hamma auth endpointlar `/api/auth/` ostida. Himoyalangan endpointlarga `Authorization: Bearer <access_token>` header kerak. Swaggerda yuqoridagi **Authorize** tugmasiga faqat `access` tokenni kiriting.
+**Swaggerda to'liq sinash tartibi**
 
-| Metod | Manzil | Token | Tavsif |
-|-------|--------|:-----:|--------|
-| POST | `/api/auth/register/` | yo'q | Ro'yxatdan o'tish, emailga 6 xonali kod yuboriladi |
-| POST | `/api/auth/verify-email/` | yo'q | Email va kod bilan emailni tasdiqlash |
-| POST | `/api/auth/resend-code/` | yo'q | Tasdiqlash kodini qayta yuborish |
-| POST | `/api/auth/login/` | yo'q | Email, telefon yoki username bilan kirish, `access` va `refresh` token qaytaradi |
-| POST | `/api/auth/token/refresh/` | yo'q | `refresh` orqali yangi `access` olish |
-| POST | `/api/auth/logout/` | ha | `refresh` tokenni bekor qilish |
-| POST | `/api/auth/forgot-password/` | yo'q | Parolni tiklash kodini emailga yuborish |
-| POST | `/api/auth/reset-password/` | yo'q | Kod bilan yangi parol o'rnatish |
-| POST | `/api/auth/change-password/` | ha | Eski parolni bilib, yangisiga almashtirish |
-| GET, PUT, PATCH | `/api/auth/me/` | ha | Profilni ko'rish va tahrirlash |
-| GET, POST | `/api/addresses/` | ha | O'z manzillari ro'yxati va yangi manzil qo'shish |
-| GET, PUT, PATCH, DELETE | `/api/addresses/{id}/` | ha | Manzilni ko'rish, o'zgartirish, o'chirish |
-| POST | `/api/send-test-email/` | yo'q | Email yuborishni sinash (faqat sinov uchun) |
+1. `auth` bo'limida `send-code` → `verify-code` → `sign-up`. Telefon bilan sinasangiz, kodni server terminalidan oling.
+2. Javobdagi `access` tokenni yuqoridagi **Authorize** tugmasiga kiriting (faqat tokenning o'zini, `Bearer` so'zisiz).
+3. Admin sifatida kategoriya va mahsulot qo'shish uchun `createsuperuser` bilan yaratilgan emailingiz va parolingiz bilan `login` qiling, olingan `access` ni Authorize ga kiriting.
+4. Oddiy foydalanuvchi bilan: `cart/items` ga mahsulot qo'shing → `addresses` ga manzil qo'shing → `orders` ga buyurtma bering.
 
-**Auth oqimi**
+### Email yuborishni sinash
 
-1. `register` — foydalanuvchi yaratiladi (`is_verified=False`), emailga kod boradi.
-2. `verify-email` — kod to'g'ri bo'lsa, email tasdiqlanadi. Tasdiqlanmagan foydalanuvchi login qila olmaydi.
-3. `login` — `access` (30 daqiqa) va `refresh` (7 kun) token olinadi.
-4. Token tugasa, `token/refresh` bilan yangilanadi. `logout` refresh tokenni bekor qiladi.
-5. Parol esdan chiqsa: `forgot-password` → emailga kod → `reset-password`.
-
-Email, telefon va username regex orqali tekshiriladi. Batafsil: [Regex tekshiruvlar](#regex-tekshiruvlar) bo'limida.
-
-**Qoidalar**
-
-- Parol Django'ning parol tekshiruvlaridan o'tishi kerak (kamida 8 belgi, juda oddiy bo'lmasligi, faqat raqamlardan iborat bo'lmasligi).
-- Kod 5 daqiqa amal qiladi va faqat bir marta ishlatiladi.
-- `forgot-password` va `resend-code` email bazada bor-yo'qligini bildirmaydi, har doim bir xil javob qaytaradi.
-- Tokensiz so'rovlar soni cheklangan (daqiqasiga 60 ta).
-- `createsuperuser` bilan yaratilgan admin avtomatik tasdiqlangan bo'ladi.
-
-**Namuna so'rovlar**
-
-```json
-POST /api/auth/register/
-{
-  "email": "ali@gmail.com",
-  "username": "ali_01",
-  "first_name": "Ali",
-  "last_name": "Valiyev",
-  "phone": "+998901234567",
-  "password": "Str0ng!pass9",
-  "password2": "Str0ng!pass9"
-}
-```
-
-```json
-POST /api/auth/verify-email/
-{ "email": "ali@gmail.com", "code": "123456" }
-```
-
-```json
-POST /api/auth/login/
-{ "login": "ali@gmail.com", "password": "Str0ng!pass9" }
-```
-
-`login` o'rniga `"+998901234567"` yoki `"ali_01"` ham yozish mumkin.
-
-```json
-POST /api/auth/reset-password/
-{ "email": "ali@gmail.com", "code": "123456", "new_password": "N3w!password" }
-```
-
-**Email yuborishni Swaggerdan sinash**
-
-1. `python manage.py runserver` bilan serverni ishga tushiring.
-2. `/api/docs/` sahifasini oching.
-3. `email` bo'limida **POST /api/send-test-email/** ni oching va **Try it out** bosing.
-4. Quyidagicha to'ldiring va **Execute** bosing:
+`POST /api/send-test-email/` ga email yozilsa, shu manzilga sinov xati boradi:
 
 ```json
 {
@@ -347,12 +392,10 @@ POST /api/auth/reset-password/
 }
 ```
 
-Muvaffaqiyatli javob: `{"detail": "Xat yuborildi"}`. Xato bo'lsa, `detail` ichida xato matni chiqadi.
-
 Bu endpoint faqat sinov uchun, autentifikatsiyasiz ochiq. Loyiha tayyor bo'lgach o'chirib tashlang.
 
-## Keyingi qadamlar
+## Eslatmalar
 
-- Mahsulotlar va kategoriyalar API'si
-- Savat va buyurtma API'si
-- Admin panel sozlamalari
+- Ro'yxat endpointlari (`products`, `orders`, `addresses`) sahifalangan: javob `count`, `next`, `previous`, `results` shaklida.
+- Rasmlar `media/` papkasida saqlanadi va `DEBUG=True` bo'lganda `/media/...` orqali beriladi.
+- Testlar yozilmagan.
