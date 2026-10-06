@@ -1,24 +1,60 @@
 # OnlineShop
 
-Django asosidagi online do'kon loyihasi. Hozircha faqat model qismi yozilgan.
+Django va Django REST Framework asosidagi online do'kon loyihasi.
 
-## O'rnatish
+Hozirgi holat: modellar, email yuborish xizmati va Swagger hujjati tayyor. Auth, savat va buyurtma API'lari keyingi bosqichda yoziladi.
+
+## Texnologiyalar
+
+- Python 3
+- Django 6.1
+- Django REST Framework
+- drf-spectacular (Swagger / OpenAPI)
+- Pillow (rasmlar uchun)
+- python-dotenv (`.env` fayl uchun)
+- SQLite (standart baza)
+
+## Loyiha tuzilishi
+
+```
+OnlineShop/
+├── config/                  Loyiha sozlamalari (settings, urls)
+├── users/                   Foydalanuvchi va autentifikatsiya
+│   ├── models.py            User, Address, VerificationCode
+│   ├── services/
+│   │   └── email_service.py Email yuborish xizmati
+│   ├── serializers.py       Test email serializeri
+│   ├── views.py             Test email endpointi
+│   └── urls.py
+├── products/                Kategoriya va mahsulotlar
+├── cart/                    Savat
+├── orders/                  Buyurtmalar
+├── .env                     Maxfiy sozlamalar (gitga tushmaydi)
+├── .env.example             .env uchun namuna
+└── requirements.txt
+```
+
+## O'rnatish va ishga tushirish
 
 ```bash
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env
 python manage.py migrate
 python manage.py createsuperuser
 python manage.py runserver
 ```
 
-## Applar
+Yangi terminal ochilganda `source venv/bin/activate` ni qayta bajarish kerak.
 
-| App | Vazifasi |
-|-----|----------|
-| `users` | Foydalanuvchi va autentifikatsiya (to'liq) |
-| `products` | Kategoriya va mahsulotlar |
-| `cart` | Savat |
-| `orders` | Buyurtmalar |
+Port band bo'lsa, boshqa port bering (bayroqsiz):
+
+```bash
+python manage.py runserver 8083
+```
+
+Eski serverni to'xtatish: `lsof -ti :8000 | xargs kill`
 
 ## Modellar
 
@@ -61,7 +97,7 @@ Statuslar: `pending` (kutilmoqda), `paid` (to'langan), `shipped` (yo'lda), `deli
 
 **OrderItem** — buyurtmadagi mahsulot: `product`, `price`, `quantity`. `price` buyurtma vaqtidagi narxni saqlaydi, shuning uchun mahsulot narxi keyin o'zgarsa ham buyurtma o'zgarmaydi.
 
-## Bog'lanishlar
+### Bog'lanishlar
 
 ```
 User ─┬─< Address
@@ -71,33 +107,96 @@ User ─┬─< Address
               └─ Address
 ```
 
-## Email yuborish (Gmail)
+## Email xizmati
 
-Email xizmati `users/services/email_service.py` da: `send_email`, `send_verification_code`, `send_reset_code`, `verify_code`.
+Fayl: `users/services/email_service.py`
 
-Gmail orqali yuborish uchun:
+| Funksiya | Vazifasi |
+|----------|----------|
+| `send_email(to_email, subject, message)` | Oddiy xat yuboradi |
+| `send_verification_code(user)` | Email tasdiqlash kodini yaratadi va yuboradi |
+| `send_reset_code(user)` | Parolni tiklash kodini yaratadi va yuboradi |
+| `verify_code(user, code, purpose)` | Kodni tekshiradi. To'g'ri, ishlatilmagan va 5 daqiqadan oshmagan bo'lsa `True` qaytaradi va kodni ishlatilgan deb belgilaydi |
 
-1. Gmail akkauntida 2 bosqichli tasdiqlashni yoqing.
-2. https://myaccount.google.com/apppasswords sahifasida "App password" yarating.
-3. `.env.example` dan `.env` nusxa oling va to'ldiring:
+Yangi kod so'ralganda, shu maqsad uchun eski ishlatilmagan kodlar bekor qilinadi.
+
+Misol:
+
+```python
+from users.services.email_service import send_verification_code, verify_code
+
+send_verification_code(user)
+verify_code(user, "123456", "email")
+```
+
+### Gmail sozlash
+
+Gmail orqali yuborish uchun oddiy parol emas, **App Password** kerak.
+
+1. https://myaccount.google.com/security sahifasida **2-Step Verification** ni yoqing.
+2. https://myaccount.google.com/apppasswords sahifasida App Password yarating (16 belgi).
+3. `.env` faylini to'ldiring (parolni probelsiz yozing):
 
 ```
 EMAIL_HOST_USER=sizning_emailingiz@gmail.com
-EMAIL_HOST_PASSWORD=16_xonali_app_password
+EMAIL_HOST_PASSWORD=16belgiliapppassword
 ```
 
-Test paytida xatlarni terminalga chiqarish uchun `.env` ga qo'shing:
+Xatlarni yuborish o'rniga terminalga chiqarish uchun (test paytida) `.env` ga qo'shing:
 
 ```
 EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
 ```
 
+`.env` faylini hech qachon gitga yuklamang va parolni boshqalarga yubormang. Parol oshkor bo'lsa, apppasswords sahifasidan o'chirib, yangisini yarating.
+
+### Xatolar
+
+| Xato | Sabab va yechim |
+|------|-----------------|
+| `Connection unexpectedly closed` | Google login bosqichida ulanishni uzdi. App Password bekor qilingan yoki akkaunt vaqtincha bloklangan. Eski parolni o'chirib yangisini yarating, https://accounts.google.com/DisplayUnlockCaptcha sahifasida **Continue** bosing, 10–15 daqiqa kuting |
+| `Username and Password not accepted` (535) | Parol yoki email noto'g'ri, yoki 2-Step Verification yoqilmagan |
+| Xat kelmadi | Spam papkasini tekshiring. `.env` dagi `EMAIL_BACKEND` console bo'lsa, xat faqat terminalga chiqadi |
+| `.env` o'zgartirildi, lekin ta'sir qilmadi | Serverni qayta ishga tushiring, `.env` faqat start paytida o'qiladi |
+
 ## Swagger
 
-`drf-spectacular` orqali ulangan. Serverni ishga tushiring (`python manage.py runserver`) va oching:
+`drf-spectacular` orqali ulangan. Server ishlaganda:
 
-- Swagger UI: http://127.0.0.1:8000/api/docs/
-- ReDoc: http://127.0.0.1:8000/api/redoc/
-- OpenAPI schema: http://127.0.0.1:8000/api/schema/
+| Manzil | Tavsif |
+|--------|--------|
+| http://127.0.0.1:8000/api/docs/ | Swagger UI |
+| http://127.0.0.1:8000/api/redoc/ | ReDoc |
+| http://127.0.0.1:8000/api/schema/ | OpenAPI schema |
 
-Hozircha API endpointlar yozilmagan, shuning uchun hujjat bo'sh ko'rinadi. Viewlar qo'shilgach, avtomatik to'ladi.
+### API endpointlar
+
+| Metod | Manzil | Tavsif |
+|-------|--------|--------|
+| POST | `/api/send-test-email/` | Email yuborishni sinash uchun |
+
+**Email yuborishni Swaggerdan sinash**
+
+1. `python manage.py runserver` bilan serverni ishga tushiring.
+2. `/api/docs/` sahifasini oching.
+3. `email` bo'limida **POST /api/send-test-email/** ni oching va **Try it out** bosing.
+4. Quyidagicha to'ldiring va **Execute** bosing:
+
+```json
+{
+  "email": "manzil@gmail.com",
+  "subject": "OnlineShop test",
+  "message": "Gmail orqali yuborish ishlayapti."
+}
+```
+
+Muvaffaqiyatli javob: `{"detail": "Xat yuborildi"}`. Xato bo'lsa, `detail` ichida xato matni chiqadi.
+
+Bu endpoint faqat sinov uchun, autentifikatsiyasiz ochiq. Loyiha tayyor bo'lgach o'chirib tashlang.
+
+## Keyingi qadamlar
+
+- Auth API: register, emailni tasdiqlash, login (JWT), parolni tiklash, profil
+- Mahsulotlar va kategoriyalar API'si
+- Savat va buyurtma API'si
+- Admin panel sozlamalari
