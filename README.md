@@ -70,3 +70,34 @@ User ─┬─< Address
       └─< Order ─< OrderItem >─ Product
               └─ Address
 ```
+
+## Email yuborish (Gmail)
+
+Email xizmati `users/services/email_service.py` da: `send_email`, `send_verification_code`, `send_reset_code`, `verify_code`.
+
+Gmail orqali yuborish uchun:
+
+1. Gmail akkauntida 2 bosqichli tasdiqlashni yoqing.
+2. https://myaccount.google.com/apppasswords sahifasida "App password" yarating.
+3. `.env.example` dan `.env` nusxa oling va to'ldiring:
+
+```
+EMAIL_HOST_USER=sizning_emailingiz@gmail.com
+EMAIL_HOST_PASSWORD=16_xonali_app_password
+```
+
+Test paytida xatlarni terminalga chiqarish uchun `.env` ga qo'shing:
+
+```
+EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
+```
+
+## Swagger
+
+`drf-spectacular` orqali ulangan. Serverni ishga tushiring (`python manage.py runserver`) va oching:
+
+- Swagger UI: http://127.0.0.1:8000/api/docs/
+- ReDoc: http://127.0.0.1:8000/api/redoc/
+- OpenAPI schema: http://127.0.0.1:8000/api/schema/
+
+Hozircha API endpointlar yozilmagan, shuning uchun hujjat bo'sh ko'rinadi. Viewlar qo'shilgach, avtomatik to'ladi.
