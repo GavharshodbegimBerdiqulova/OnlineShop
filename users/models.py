@@ -38,7 +38,6 @@ class User(AbstractUser):
         CUSTOMER = "customer", "Mijoz"
         ADMIN = "admin", "Admin"
 
-    # username o'rniga email ishlatamiz
     username = None
     email = models.EmailField("Email", unique=True)
     phone = models.CharField("Telefon", max_length=20, blank=True)
@@ -48,7 +47,7 @@ class User(AbstractUser):
     is_verified = models.BooleanField("Email tasdiqlangan", default=False)
 
     USERNAME_FIELD = "email"
-    REQUIRED_FIELDS = []  # createsuperuser faqat email va parol so'raydi
+    REQUIRED_FIELDS = []
 
     objects = UserManager()
 
@@ -82,7 +81,6 @@ class Address(models.Model):
         return f"{self.title}: {self.city}, {self.street}"
 
     def save(self, *args, **kwargs):
-        # Faqat bitta manzil asosiy bo'lishi kerak
         if self.is_default:
             Address.objects.filter(user=self.user, is_default=True).exclude(pk=self.pk).update(is_default=False)
         super().save(*args, **kwargs)
@@ -113,5 +111,4 @@ class VerificationCode(models.Model):
         return str(random.randint(100000, 999999))
 
     def is_expired(self):
-        # Kod 5 daqiqa amal qiladi
         return timezone.now() > self.created_at + timedelta(minutes=5)

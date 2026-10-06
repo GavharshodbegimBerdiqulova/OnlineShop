@@ -22,7 +22,6 @@ class CartItem(models.Model):
     quantity = models.PositiveIntegerField(default=1)
 
     class Meta:
-        # Bir mahsulot savatda bitta qator bo'lib turadi
         unique_together = ("cart", "product")
 
     def __str__(self):
